@@ -6,247 +6,6 @@
     <title>Dashboard Admin Kuis</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script type="module">
-        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
-
-        // --- PENTING: KONFIGURASI SUPABASE ANDA ---
-        // Ganti dengan URL dan Anon Key dari proyek Supabase Anda.
-        // Anda bisa menemukannya di Pengaturan Proyek > API.
-        const SUPABASE_URL = https://jpxtbdawajjyrvqrgijd.supabase.co; 
-        const SUPABASE_ANON_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpweHRiZGF3YWpqeXJ2cXJnaWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTI4OTgsImV4cCI6MjA3MTg4ODg5OH0.vEqCzHYBByFZEXeLIBqx6b40x6-tjSYa3Il_b2mI9NE;
-        // ---------------------------------------------
-
-        // Inisialisasi Supabase Client
-        let supabase;
-        try {
-            if (!SUPABASE_URL.includes('URL_SUPABASE_ANDA')) {
-                supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-            }
-        } catch (error) {
-            console.error("Error initializing Supabase:", error);
-        }
-
-        // Fungsi untuk mengambil jumlah total pengguna
-        async function fetchTotalUsers() {
-            const { data, error, count } = await supabase
-                .from('users')
-                .select('*', { count: 'exact', head: true });
-            
-            if (error) {
-                console.error('Error fetching total users:', error.message);
-                return 0;
-            }
-            return count;
-        }
-
-        // Fungsi untuk mengambil pengguna baru dalam 7 hari terakhir
-        async function fetchNewUsersLast7Days() {
-            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-            const { data, error, count } = await supabase
-                .from('users')
-                .select('created_at', { count: 'exact', head: true })
-                .gte('created_at', sevenDaysAgo);
-
-            if (error) {
-                console.error('Error fetching new users:', error.message);
-                return 0;
-            }
-            return count;
-        }
-
-        // Fungsi untuk mengambil data pengerjaan kuis hari ini
-        // Asumsi: Anda memiliki tabel bernama 'quiz_results' dengan kolom 'created_at'
-        async function fetchQuizAttemptsToday() {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const todayISO = today.toISOString();
-
-            const { data, error, count } = await supabase
-                .from('quiz_results') // GANTI NAMA TABEL JIKA PERLU
-                .select('*', { count: 'exact', head: true })
-                .gte('created_at', todayISO);
-
-            if (error) {
-                console.error('Error fetching quiz attempts today:', error.message, "(Mungkin tabel 'quiz_results' tidak ada atau nama kolom salah)");
-                return 0;
-            }
-            return count;
-        }
-
-        // Fungsi untuk mengambil data untuk chart pendaftaran pengguna
-        async function fetchUserRegistrationData() {
-            const dates = [];
-            const counts = [];
-            for (let i = 6; i >= 0; i--) {
-                const date = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
-                dates.push(date.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' }));
-
-                const startOfDay = new Date(date);
-                startOfDay.setHours(0, 0, 0, 0);
-                const endOfDay = new Date(date);
-                endOfDay.setHours(23, 59, 59, 999);
-
-                const { count } = await supabase
-                    .from('users')
-                    .select('*', { count: 'exact', head: true })
-                    .gte('created_at', startOfDay.toISOString())
-                    .lte('created_at', endOfDay.toISOString());
-                
-                counts.push(count || 0);
-            }
-            return { labels: dates, data: counts };
-        }
-        
-        // Fungsi untuk mengambil data kuis paling populer
-        // Asumsi: tabel 'quiz_results' punya kolom 'quiz_name'
-        async function fetchPopularQuizzes() {
-            const { data, error } = await supabase
-                .from('quiz_results') // GANTI NAMA TABEL JIKA PERLU
-                .select('quiz_name'); // GANTI NAMA KOLOM JIKA PERLU
-
-            if (error) {
-                console.error('Error fetching popular quizzes:', error.message);
-                return { labels: [], data: [] };
-            }
-
-            const quizCounts = data.reduce((acc, item) => {
-                acc[item.quiz_name] = (acc[item.quiz_name] || 0) + 1;
-                return acc;
-            }, {});
-
-            const sortedQuizzes = Object.entries(quizCounts)
-                .sort(([,a],[,b]) => b-a)
-                .slice(0, 5); // Ambil top 5
-
-            return {
-                labels: sortedQuizzes.map(item => item[0]),
-                data: sortedQuizzes.map(item => item[1]),
-            };
-        }
-
-        // Fungsi untuk mengambil aktivitas terbaru
-        // Asumsi: Anda memiliki tabel 'profiles' yang terhubung dengan 'users' via 'id'
-        async function fetchRecentActivities() {
-            const { data, error } = await supabase
-                .from('quiz_results') // GANTI NAMA TABEL JIKA PERLU
-                .select(`
-                    created_at,
-                    score,
-                    quiz_name,
-                    user_id,
-                    profiles ( username ) 
-                `) // GANTI NAMA TABEL & KOLOM JIKA PERLU
-                .order('created_at', { ascending: false })
-                .limit(5);
-
-            if(error) {
-                console.error('Error fetching recent activities:', error.message);
-                return [];
-            }
-            return data;
-        }
-
-        // Render chart
-        function createChart(ctx, type, labels, data, label, backgroundColor, borderColor) {
-            new Chart(ctx, {
-                type: type,
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: label,
-                        data: data,
-                        backgroundColor: backgroundColor,
-                        borderColor: borderColor,
-                        borderWidth: 1,
-                        tension: 0.1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            ticks: { color: '#9ca3af' },
-                            grid: { color: '#374151' }
-                        },
-                        x: {
-                            ticks: { color: '#9ca3af' },
-                            grid: { color: '#374151' }
-                        }
-                    },
-                    plugins: {
-                        legend: {
-                            labels: {
-                                color: '#d1d5db'
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        // Event listener saat halaman dimuat
-        document.addEventListener('DOMContentLoaded', async () => {
-            if (!supabase) {
-                document.getElementById('loading-state').classList.add('hidden');
-                document.getElementById('error-state').classList.remove('hidden');
-                return;
-            }
-
-            const [
-                totalUsers, 
-                newUsers, 
-                attemptsToday,
-                userChartData,
-                popularQuizData,
-                recentActivities
-            ] = await Promise.all([
-                fetchTotalUsers(),
-                fetchNewUsersLast7Days(),
-                fetchQuizAttemptsToday(),
-                fetchUserRegistrationData(),
-                fetchPopularQuizzes(),
-                fetchRecentActivities()
-            ]);
-
-            // Update KPI Cards
-            document.getElementById('total-users').textContent = totalUsers;
-            document.getElementById('new-users').textContent = newUsers;
-            document.getElementById('quiz-attempts-today').textContent = attemptsToday;
-
-            // Render Charts
-            const userCtx = document.getElementById('user-registration-chart').getContext('2d');
-            createChart(userCtx, 'line', userChartData.labels, userChartData.data, 'Pengguna Baru', 'rgba(59, 130, 246, 0.2)', 'rgba(59, 130, 246, 1)');
-
-            const quizCtx = document.getElementById('popular-quizzes-chart').getContext('2d');
-            createChart(quizCtx, 'doughnut', popularQuizData.labels, popularQuizData.data, 'Pengerjaan', 
-                ['#10b981', '#3b82f6', '#ef4444', '#f97316', '#8b5cf6'],
-                ['#1f2937']
-            );
-            
-            // Render Recent Activities Table
-            const activityTable = document.getElementById('recent-activity-body');
-            if (recentActivities.length === 0) {
-                activityTable.innerHTML = `<tr><td colspan="4" class="py-4 px-6 text-center text-gray-400">Belum ada aktivitas.</td></tr>`;
-            } else {
-                activityTable.innerHTML = recentActivities.map(activity => `
-                    <tr class="border-b border-gray-700">
-                        <td class="py-4 px-6">${activity.profiles?.username || 'Tanpa Nama'}</td>
-                        <td class="py-4 px-6">${activity.quiz_name}</td>
-                        <td class="py-4 px-6 font-medium text-emerald-400">${activity.score}</td>
-                        <td class="py-4 px-6 text-sm text-gray-400">${new Date(activity.created_at).toLocaleString('id-ID')}</td>
-                    </tr>
-                `).join('');
-            }
-
-
-            // Sembunyikan loading state dan tampilkan konten
-            document.getElementById('loading-state').classList.add('hidden');
-            document.getElementById('main-content').classList.remove('hidden');
-        });
-
-    </script>
     <style>
         body {
             background-color: #111827;
@@ -279,8 +38,6 @@
 
     <!-- Main Content -->
     <main class="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto">
-        
-        <!-- Loading State -->
         <div id="loading-state" class="text-center py-20">
             <svg class="animate-spin h-8 w-8 text-blue-400 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -288,28 +45,21 @@
             </svg>
             <p class="mt-4 text-lg text-gray-400">Memuat data dari Supabase...</p>
         </div>
-        
-        <!-- Error State -->
         <div id="error-state" class="hidden text-center py-20 bg-red-900/20 border border-red-500 rounded-lg">
-            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mx-auto text-red-400"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <h2 class="mt-4 text-2xl font-bold text-red-300">Gagal Terhubung ke Supabase</h2>
-            <p class="mt-2 text-red-400">Pastikan Anda telah memasukkan <strong>URL</strong> dan <strong>Anon Key</strong> Supabase yang benar di dalam file HTML.</p>
+             <h2 class="mt-4 text-2xl font-bold text-red-300">Gagal Terhubung</h2>
+             <p class="mt-2 text-red-400">Pastikan URL dan Anon Key Supabase sudah benar.</p>
         </div>
-
         <div id="main-content" class="hidden">
             <!-- KPI Cards -->
             <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-                <!-- Total Users Card -->
                 <div class="kpi-card rounded-lg p-6">
                     <h3 class="text-sm font-medium text-gray-400">Total Pengguna</h3>
                     <p id="total-users" class="text-3xl font-bold text-white mt-2">0</p>
                 </div>
-                <!-- New Users Card -->
                 <div class="kpi-card rounded-lg p-6">
                     <h3 class="text-sm font-medium text-gray-400">Pengguna Baru (7 Hari)</h3>
                     <p id="new-users" class="text-3xl font-bold text-white mt-2">0</p>
                 </div>
-                <!-- Quiz Attempts Today Card -->
                 <div class="kpi-card rounded-lg p-6">
                     <h3 class="text-sm font-medium text-gray-400">Kuis Dikerjakan Hari Ini</h3>
                     <p id="quiz-attempts-today" class="text-3xl font-bold text-white mt-2">0</p>
@@ -331,7 +81,7 @@
                     </div>
                 </div>
             </section>
-            
+
             <!-- Recent Activities Table -->
             <section>
                 <h3 class="text-xl font-semibold text-white mb-4">Aktivitas Terbaru</h3>
@@ -346,15 +96,181 @@
                                     <th scope="col" class="py-3 px-6">Waktu</th>
                                 </tr>
                             </thead>
-                            <tbody id="recent-activity-body">
-                                <!-- Data akan diisi oleh JavaScript -->
-                            </tbody>
+                            <tbody id="recent-activity-body"></tbody>
                         </table>
                     </div>
                 </div>
             </section>
-
         </div>
     </main>
+
+    <!-- REVISI KESELURUHAN PADA SCRIPT -->
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+        // --- KONFIGURASI SUPABASE ANDA ---
+        const SUPABASE_URL = "https://jpxtbdawajjyrvqrgijd.supabase.co"; 
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpweHRiZGF3YWpqeXJ2cXJnaWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYzMTI4OTgsImV4cCI6MjA3MTg4ODg5OH0.vEqCzHYBByFZEXeLIBqx6b40x6-tjSYa3Il_b2mI9NE";
+        
+        // --- Inisialisasi Supabase Client ---
+        let supabase;
+        try {
+            supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        } catch (error) {
+            console.error("Error initializing Supabase:", error);
+        }
+        
+        // --- FUNGSI-FUNGSI PENGAMBIL DATA ---
+
+        // Mengambil jumlah total pengguna dari tabel 'profiles'
+        async function fetchTotalUsers() {
+            // REVISI: Menggunakan tabel 'profiles'
+            const { count, error } = await supabase
+                .from('profiles')
+                .select('*', { count: 'exact', head: true });
+            if (error) console.error('Error fetching total users:', error.message);
+            return count || 0;
+        }
+
+        // Mengambil pengguna baru (dari 'profiles') dalam 7 hari terakhir
+        async function fetchNewUsersLast7Days() {
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+            // REVISI: Menggunakan tabel 'profiles'
+            const { count, error } = await supabase
+                .from('profiles')
+                .select('created_at', { count: 'exact', head: true })
+                .gte('created_at', sevenDaysAgo);
+            if (error) console.error('Error fetching new users:', error.message);
+            return count || 0;
+        }
+
+        // Mengambil pengerjaan kuis hari ini dari 'quiz_attempts'
+        async function fetchQuizAttemptsToday() {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            // REVISI: Menggunakan 'quiz_attempts' dan kolom 'submitted_at'
+            const { count, error } = await supabase
+                .from('quiz_attempts')
+                .select('*', { count: 'exact', head: true })
+                .gte('submitted_at', today.toISOString());
+            if (error) console.error('Error fetching quiz attempts:', error.message);
+            return count || 0;
+        }
+
+        // Mengambil data untuk chart pendaftaran pengguna (dari 'profiles')
+        async function fetchUserRegistrationData() {
+            const labels = [];
+            const data = [];
+            for (let i = 6; i >= 0; i--) {
+                const date = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+                labels.push(date.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' }));
+
+                const startOfDay = new Date(date);
+                startOfDay.setHours(0, 0, 0, 0);
+                const endOfDay = new Date(date);
+                endOfDay.setHours(23, 59, 59, 999);
+
+                // REVISI: Menggunakan tabel 'profiles'
+                const { count } = await supabase
+                    .from('profiles')
+                    .select('*', { count: 'exact', head: true })
+                    .gte('created_at', startOfDay.toISOString())
+                    .lte('created_at', endOfDay.toISOString());
+                data.push(count || 0);
+            }
+            return { labels, data };
+        }
+
+        // Mengambil data kuis terpopuler dari 'quiz_attempts'
+        async function fetchPopularQuizzes() {
+            // REVISI: Menggunakan 'quiz_attempts' dan kolom 'quiz_id'
+            const { data, error } = await supabase.from('quiz_attempts').select('quiz_id');
+            if (error) {
+                console.error('Error fetching popular quizzes:', error.message);
+                return { labels: [], data: [] };
+            }
+
+            const quizCounts = data.reduce((acc, item) => {
+                const quizName = item.quiz_id.replace(/_/g, ' ').replace('kelas01 bab01 ', ''); // Membersihkan nama kuis
+                acc[quizName] = (acc[quizName] || 0) + 1;
+                return acc;
+            }, {});
+
+            const sortedQuizzes = Object.entries(quizCounts).sort(([,a],[,b]) => b-a).slice(0, 5);
+            return {
+                labels: sortedQuizzes.map(item => item[0]),
+                data: sortedQuizzes.map(item => item[1]),
+            };
+        }
+
+        // Mengambil aktivitas terbaru dari 'quiz_attempts' dan menggabungkannya dengan 'profiles'
+        async function fetchRecentActivities() {
+            // REVISI: Query disesuaikan dengan skema Anda
+            const { data, error } = await supabase
+                .from('quiz_attempts')
+                .select(`
+                    submitted_at,
+                    score,
+                    quiz_id,
+                    profiles ( username ) 
+                `)
+                .order('submitted_at', { ascending: false })
+                .limit(5);
+            if(error) console.error('Error fetching recent activities:', error.message);
+            return data || [];
+        }
+
+        // Fungsi utilitas untuk membuat chart
+        function createChart(ctx, type, labels, data, label, backgroundColor, borderColor) {
+             new Chart(ctx, { type, data: { labels, datasets: [{ label, data, backgroundColor, borderColor, borderWidth: type === 'doughnut' ? 0 : 1, tension: 0.1 }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { color: '#9ca3af' }, grid: { color: '#374151' } }, x: { ticks: { color: '#9ca3af' }, grid: { color: '#374151' } } }, plugins: { legend: { labels: { color: '#d1d5db' } } } } });
+        }
+
+        // --- INISIALISASI HALAMAN ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!supabase) {
+                document.getElementById('loading-state').classList.add('hidden');
+                document.getElementById('error-state').classList.remove('hidden');
+                return;
+            }
+
+            const [
+                totalUsers, newUsers, attemptsToday,
+                userChartData, popularQuizData, recentActivities
+            ] = await Promise.all([
+                fetchTotalUsers(), fetchNewUsersLast7Days(), fetchQuizAttemptsToday(),
+                fetchUserRegistrationData(), fetchPopularQuizzes(), fetchRecentActivities()
+            ]);
+
+            // Update KPI Cards
+            document.getElementById('total-users').textContent = totalUsers;
+            document.getElementById('new-users').textContent = newUsers;
+            document.getElementById('quiz-attempts-today').textContent = attemptsToday;
+
+            // Render Charts
+            const userCtx = document.getElementById('user-registration-chart').getContext('2d');
+            createChart(userCtx, 'line', userChartData.labels, userChartData.data, 'Pengguna Baru', 'rgba(59, 130, 246, 0.2)', '#3b82f6');
+            const quizCtx = document.getElementById('popular-quizzes-chart').getContext('2d');
+            createChart(quizCtx, 'doughnut', popularQuizData.labels, popularQuizData.data, 'Pengerjaan', ['#10b981', '#3b82f6', '#ef4444', '#f97316', '#8b5cf6'], '#1f2937');
+            
+            // Render Recent Activities Table
+            const activityTable = document.getElementById('recent-activity-body');
+            if (recentActivities.length > 0) {
+                 activityTable.innerHTML = recentActivities.map(act => `
+                    <tr class="border-b border-gray-700 hover:bg-gray-700/50">
+                        <td class="py-4 px-6">${act.profiles?.username || 'Tanpa Nama'}</td>
+                        <td class="py-4 px-6 capitalize">${act.quiz_id.replace(/_/g, ' ')}</td>
+                        <td class="py-4 px-6 font-medium text-emerald-400">${act.score}</td>
+                        <td class="py-4 px-6 text-sm text-gray-400">${new Date(act.submitted_at).toLocaleString('id-ID')}</td>
+                    </tr>
+                `).join('');
+            } else {
+                 activityTable.innerHTML = `<tr><td colspan="4" class="py-4 px-6 text-center text-gray-400">Belum ada aktivitas.</td></tr>`;
+            }
+
+            // Tampilkan konten utama
+            document.getElementById('loading-state').classList.add('hidden');
+            document.getElementById('main-content').classList.remove('hidden');
+        });
+    </script>
 </body>
 </html>
