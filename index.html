@@ -1,632 +1,360 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard Quiz - Profil & Leaderboard</title>
+    <title>Dashboard Admin Kuis</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm';
+
+        // --- PENTING: KONFIGURASI SUPABASE ANDA ---
+        // Ganti dengan URL dan Anon Key dari proyek Supabase Anda.
+        // Anda bisa menemukannya di Pengaturan Proyek > API.
+        const SUPABASE_URL = 'URL_SUPABASE_ANDA'; 
+        const SUPABASE_ANON_KEY = 'ANON_KEY_SUPABASE_ANDA';
+        // ---------------------------------------------
+
+        // Inisialisasi Supabase Client
+        let supabase;
+        try {
+            if (!SUPABASE_URL.includes('URL_SUPABASE_ANDA')) {
+                supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            }
+        } catch (error) {
+            console.error("Error initializing Supabase:", error);
+        }
+
+        // Fungsi untuk mengambil jumlah total pengguna
+        async function fetchTotalUsers() {
+            const { data, error, count } = await supabase
+                .from('users')
+                .select('*', { count: 'exact', head: true });
+            
+            if (error) {
+                console.error('Error fetching total users:', error.message);
+                return 0;
+            }
+            return count;
+        }
+
+        // Fungsi untuk mengambil pengguna baru dalam 7 hari terakhir
+        async function fetchNewUsersLast7Days() {
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+            const { data, error, count } = await supabase
+                .from('users')
+                .select('created_at', { count: 'exact', head: true })
+                .gte('created_at', sevenDaysAgo);
+
+            if (error) {
+                console.error('Error fetching new users:', error.message);
+                return 0;
+            }
+            return count;
+        }
+
+        // Fungsi untuk mengambil data pengerjaan kuis hari ini
+        // Asumsi: Anda memiliki tabel bernama 'quiz_results' dengan kolom 'created_at'
+        async function fetchQuizAttemptsToday() {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const todayISO = today.toISOString();
+
+            const { data, error, count } = await supabase
+                .from('quiz_results') // GANTI NAMA TABEL JIKA PERLU
+                .select('*', { count: 'exact', head: true })
+                .gte('created_at', todayISO);
+
+            if (error) {
+                console.error('Error fetching quiz attempts today:', error.message, "(Mungkin tabel 'quiz_results' tidak ada atau nama kolom salah)");
+                return 0;
+            }
+            return count;
+        }
+
+        // Fungsi untuk mengambil data untuk chart pendaftaran pengguna
+        async function fetchUserRegistrationData() {
+            const dates = [];
+            const counts = [];
+            for (let i = 6; i >= 0; i--) {
+                const date = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+                dates.push(date.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' }));
+
+                const startOfDay = new Date(date);
+                startOfDay.setHours(0, 0, 0, 0);
+                const endOfDay = new Date(date);
+                endOfDay.setHours(23, 59, 59, 999);
+
+                const { count } = await supabase
+                    .from('users')
+                    .select('*', { count: 'exact', head: true })
+                    .gte('created_at', startOfDay.toISOString())
+                    .lte('created_at', endOfDay.toISOString());
+                
+                counts.push(count || 0);
+            }
+            return { labels: dates, data: counts };
+        }
+        
+        // Fungsi untuk mengambil data kuis paling populer
+        // Asumsi: tabel 'quiz_results' punya kolom 'quiz_name'
+        async function fetchPopularQuizzes() {
+            const { data, error } = await supabase
+                .from('quiz_results') // GANTI NAMA TABEL JIKA PERLU
+                .select('quiz_name'); // GANTI NAMA KOLOM JIKA PERLU
+
+            if (error) {
+                console.error('Error fetching popular quizzes:', error.message);
+                return { labels: [], data: [] };
+            }
+
+            const quizCounts = data.reduce((acc, item) => {
+                acc[item.quiz_name] = (acc[item.quiz_name] || 0) + 1;
+                return acc;
+            }, {});
+
+            const sortedQuizzes = Object.entries(quizCounts)
+                .sort(([,a],[,b]) => b-a)
+                .slice(0, 5); // Ambil top 5
+
+            return {
+                labels: sortedQuizzes.map(item => item[0]),
+                data: sortedQuizzes.map(item => item[1]),
+            };
+        }
+
+        // Fungsi untuk mengambil aktivitas terbaru
+        // Asumsi: Anda memiliki tabel 'profiles' yang terhubung dengan 'users' via 'id'
+        async function fetchRecentActivities() {
+            const { data, error } = await supabase
+                .from('quiz_results') // GANTI NAMA TABEL JIKA PERLU
+                .select(`
+                    created_at,
+                    score,
+                    quiz_name,
+                    user_id,
+                    profiles ( username ) 
+                `) // GANTI NAMA TABEL & KOLOM JIKA PERLU
+                .order('created_at', { ascending: false })
+                .limit(5);
+
+            if(error) {
+                console.error('Error fetching recent activities:', error.message);
+                return [];
+            }
+            return data;
+        }
+
+        // Render chart
+        function createChart(ctx, type, labels, data, label, backgroundColor, borderColor) {
+            new Chart(ctx, {
+                type: type,
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: label,
+                        data: data,
+                        backgroundColor: backgroundColor,
+                        borderColor: borderColor,
+                        borderWidth: 1,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: { color: '#9ca3af' },
+                            grid: { color: '#374151' }
+                        },
+                        x: {
+                            ticks: { color: '#9ca3af' },
+                            grid: { color: '#374151' }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#d1d5db'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Event listener saat halaman dimuat
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!supabase) {
+                document.getElementById('loading-state').classList.add('hidden');
+                document.getElementById('error-state').classList.remove('hidden');
+                return;
+            }
+
+            const [
+                totalUsers, 
+                newUsers, 
+                attemptsToday,
+                userChartData,
+                popularQuizData,
+                recentActivities
+            ] = await Promise.all([
+                fetchTotalUsers(),
+                fetchNewUsersLast7Days(),
+                fetchQuizAttemptsToday(),
+                fetchUserRegistrationData(),
+                fetchPopularQuizzes(),
+                fetchRecentActivities()
+            ]);
+
+            // Update KPI Cards
+            document.getElementById('total-users').textContent = totalUsers;
+            document.getElementById('new-users').textContent = newUsers;
+            document.getElementById('quiz-attempts-today').textContent = attemptsToday;
+
+            // Render Charts
+            const userCtx = document.getElementById('user-registration-chart').getContext('2d');
+            createChart(userCtx, 'line', userChartData.labels, userChartData.data, 'Pengguna Baru', 'rgba(59, 130, 246, 0.2)', 'rgba(59, 130, 246, 1)');
+
+            const quizCtx = document.getElementById('popular-quizzes-chart').getContext('2d');
+            createChart(quizCtx, 'doughnut', popularQuizData.labels, popularQuizData.data, 'Pengerjaan', 
+                ['#10b981', '#3b82f6', '#ef4444', '#f97316', '#8b5cf6'],
+                ['#1f2937']
+            );
+            
+            // Render Recent Activities Table
+            const activityTable = document.getElementById('recent-activity-body');
+            if (recentActivities.length === 0) {
+                activityTable.innerHTML = `<tr><td colspan="4" class="py-4 px-6 text-center text-gray-400">Belum ada aktivitas.</td></tr>`;
+            } else {
+                activityTable.innerHTML = recentActivities.map(activity => `
+                    <tr class="border-b border-gray-700">
+                        <td class="py-4 px-6">${activity.profiles?.username || 'Tanpa Nama'}</td>
+                        <td class="py-4 px-6">${activity.quiz_name}</td>
+                        <td class="py-4 px-6 font-medium text-emerald-400">${activity.score}</td>
+                        <td class="py-4 px-6 text-sm text-gray-400">${new Date(activity.created_at).toLocaleString('id-ID')}</td>
+                    </tr>
+                `).join('');
+            }
+
+
+            // Sembunyikan loading state dan tampilkan konten
+            document.getElementById('loading-state').classList.add('hidden');
+            document.getElementById('main-content').classList.remove('hidden');
+        });
+
+    </script>
     <style>
-        /* CSS Reset dan Base Styling */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #e3f2fd 0%, #f8f9ff 100%);
-            color: #2c3e50;
-            line-height: 1.6;
-            min-height: 100vh;
+            background-color: #111827;
+            color: #d1d5db;
+            font-family: 'Inter', sans-serif;
         }
-
-        /* Header Styling */
-        .header {
-            background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 100%);
-            color: white;
-            padding: 2rem 0;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            margin-bottom: 2rem;
+        .kpi-card {
+            background-color: #1f2937;
+            border: 1px solid #374151;
+            transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
         }
-
-        .header-content {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 1rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
+        .kpi-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
         }
-
-        .welcome-message {
-            font-size: 1.8rem;
-            font-weight: 600;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            padding: 0.5rem 1.5rem;
-            border-radius: 25px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            font-weight: 500;
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
-        /* Container */
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 1rem;
-        }
-
-        /* Card Styling */
-        .card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
-            margin-bottom: 2rem;
-            overflow: hidden;
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-        }
-
-        .card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-        }
-
-        .card-header {
-            background: linear-gradient(135deg, #81c784 0%, #66bb6a 100%);
-            color: white;
-            padding: 1.5rem;
-            font-size: 1.4rem;
-            font-weight: 600;
-        }
-
-        .card-content {
-            padding: 1.5rem;
-        }
-
-        /* Stats Cards */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-
-        .stat-card {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            text-align: center;
-            border-left: 4px solid #42a5f5;
-        }
-
-        .stat-number {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #42a5f5;
-            display: block;
-        }
-
-        .stat-label {
-            color: #666;
-            font-size: 0.9rem;
-            margin-top: 0.5rem;
-        }
-
-        /* Table Styling */
-        .table-container {
-            overflow-x: auto;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-        }
-
-        th {
-            background: linear-gradient(135deg, #64b5f6 0%, #42a5f5 100%);
-            color: white;
-            padding: 1rem;
-            text-align: left;
-            font-weight: 600;
-            position: sticky;
-            top: 0;
-        }
-
-        td {
-            padding: 1rem;
-            border-bottom: 1px solid #e0e0e0;
-            transition: background-color 0.2s ease;
-        }
-
-        tr:hover td {
-            background-color: #f5f5f5;
-        }
-
-        tr:nth-child(even) {
-            background-color: #fafafa;
-        }
-
-        /* Rank Badge */
-        .rank-badge {
-            display: inline-block;
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            text-align: center;
-            line-height: 30px;
-            font-weight: bold;
-            color: white;
-        }
-
-        .rank-1 { background: linear-gradient(135deg, #ffd700, #ffb300); }
-        .rank-2 { background: linear-gradient(135deg, #c0c0c0, #9e9e9e); }
-        .rank-3 { background: linear-gradient(135deg, #cd7f32, #a0522d); }
-        .rank-other { background: linear-gradient(135deg, #66bb6a, #4caf50); }
-
-        /* Loading Animation */
-        .loading {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 3rem;
-            flex-direction: column;
-        }
-
-        .spinner {
-            border: 4px solid #e3f2fd;
-            border-top: 4px solid #42a5f5;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin-bottom: 1rem;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* Error Message */
-        .error-message {
-            background: #ffebee;
-            color: #c62828;
-            padding: 1rem;
-            border-radius: 8px;
-            border-left: 4px solid #f44336;
-            margin: 1rem 0;
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 3rem;
-            color: #666;
-        }
-
-        .empty-state-icon {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-            opacity: 0.5;
-        }
-
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .header-content {
-                flex-direction: column;
-                gap: 1rem;
-                text-align: center;
-            }
-
-            .welcome-message {
-                font-size: 1.4rem;
-            }
-
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-
-            th, td {
-                padding: 0.75rem 0.5rem;
-                font-size: 0.9rem;
-            }
-
-            .card-content {
-                padding: 1rem;
-            }
-        }
-
-        /* Smooth Transitions */
-        .fade-in {
-            animation: fadeIn 0.6s ease-in;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+        @import url('https://rsms.me/inter/inter.css');
     </style>
 </head>
-<body>
+<body class="antialiased">
+
     <!-- Header -->
-    <header class="header">
-        <div class="header-content">
-            <h1 class="welcome-message" id="welcomeMessage">
-                <span id="loadingWelcome">Memuat...</span>
+    <header class="bg-gray-800 shadow-md p-4">
+        <div class="max-w-7xl mx-auto">
+            <h1 class="text-2xl font-bold text-white flex items-center gap-3">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-400"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20V16"/></svg>
+                Dashboard Admin Kuis
             </h1>
-            <button class="logout-btn" onclick="logout()">
-                Logout
-            </button>
         </div>
     </header>
 
     <!-- Main Content -->
-    <div class="container">
-        <!-- Profile Section -->
-        <div class="card fade-in">
-            <div class="card-header">
-                📊 Profil Pengguna
-            </div>
-            <div class="card-content">
-                <!-- Stats Grid -->
-                <div class="stats-grid" id="statsGrid">
-                    <div class="stat-card">
-                        <span class="stat-number" id="totalQuizzes">-</span>
-                        <div class="stat-label">Total Kuis</div>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-number" id="totalScore">-</span>
-                        <div class="stat-label">Total Skor</div>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-number" id="averageScore">-</span>
-                        <div class="stat-label">Rata-rata Skor</div>
-                    </div>
-                </div>
-
-                <!-- Profile Loading/Error State -->
-                <div id="profileLoading" class="loading">
-                    <div class="spinner"></div>
-                    <div>Memuat data profil...</div>
-                </div>
-
-                <div id="profileError" class="error-message" style="display: none;">
-                    <strong>Error:</strong> <span id="profileErrorText"></span>
-                </div>
-
-                <!-- Profile Table -->
-                <div class="table-container" id="profileTableContainer" style="display: none;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Nama Kuis</th>
-                                <th>Skor</th>
-                                <th>Tanggal</th>
-                            </tr>
-                        </thead>
-                        <tbody id="profileTableBody">
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Empty State for Profile -->
-                <div id="profileEmpty" class="empty-state" style="display: none;">
-                    <div class="empty-state-icon">📝</div>
-                    <h3>Belum Ada Kuis</h3>
-                    <p>Anda belum mengerjakan kuis apa pun. Mulai kerjakan kuis untuk melihat skor di sini!</p>
-                </div>
-            </div>
+    <main class="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto">
+        
+        <!-- Loading State -->
+        <div id="loading-state" class="text-center py-20">
+            <svg class="animate-spin h-8 w-8 text-blue-400 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-4 text-lg text-gray-400">Memuat data dari Supabase...</p>
+        </div>
+        
+        <!-- Error State -->
+        <div id="error-state" class="hidden text-center py-20 bg-red-900/20 border border-red-500 rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mx-auto text-red-400"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <h2 class="mt-4 text-2xl font-bold text-red-300">Gagal Terhubung ke Supabase</h2>
+            <p class="mt-2 text-red-400">Pastikan Anda telah memasukkan <strong>URL</strong> dan <strong>Anon Key</strong> Supabase yang benar di dalam file HTML.</p>
         </div>
 
-        <!-- Leaderboard Section -->
-        <div class="card fade-in">
-            <div class="card-header">
-                🏆 Papan Peringkat
-            </div>
-            <div class="card-content">
-                <!-- Leaderboard Loading/Error State -->
-                <div id="leaderboardLoading" class="loading">
-                    <div class="spinner"></div>
-                    <div>Memuat papan peringkat...</div>
+        <div id="main-content" class="hidden">
+            <!-- KPI Cards -->
+            <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                <!-- Total Users Card -->
+                <div class="kpi-card rounded-lg p-6">
+                    <h3 class="text-sm font-medium text-gray-400">Total Pengguna</h3>
+                    <p id="total-users" class="text-3xl font-bold text-white mt-2">0</p>
                 </div>
+                <!-- New Users Card -->
+                <div class="kpi-card rounded-lg p-6">
+                    <h3 class="text-sm font-medium text-gray-400">Pengguna Baru (7 Hari)</h3>
+                    <p id="new-users" class="text-3xl font-bold text-white mt-2">0</p>
+                </div>
+                <!-- Quiz Attempts Today Card -->
+                <div class="kpi-card rounded-lg p-6">
+                    <h3 class="text-sm font-medium text-gray-400">Kuis Dikerjakan Hari Ini</h3>
+                    <p id="quiz-attempts-today" class="text-3xl font-bold text-white mt-2">0</p>
+                </div>
+            </section>
 
-                <div id="leaderboardError" class="error-message" style="display: none;">
-                    <strong>Error:</strong> <span id="leaderboardErrorText"></span>
+            <!-- Charts -->
+            <section class="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-8">
+                <div class="lg:col-span-3 bg-gray-800 border border-gray-700 rounded-lg p-6 h-96">
+                    <h3 class="font-semibold text-white mb-4">Grafik Pendaftaran Pengguna (7 Hari Terakhir)</h3>
+                    <div class="relative h-full w-full">
+                       <canvas id="user-registration-chart"></canvas>
+                    </div>
                 </div>
+                <div class="lg:col-span-2 bg-gray-800 border border-gray-700 rounded-lg p-6 h-96">
+                    <h3 class="font-semibold text-white mb-4">Kuis Terpopuler</h3>
+                    <div class="relative h-full w-full flex items-center justify-center">
+                        <canvas id="popular-quizzes-chart"></canvas>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Recent Activities Table -->
+            <section>
+                <h3 class="text-xl font-semibold text-white mb-4">Aktivitas Terbaru</h3>
+                <div class="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm text-left text-gray-300">
+                            <thead class="text-xs text-gray-400 uppercase bg-gray-700/50">
+                                <tr>
+                                    <th scope="col" class="py-3 px-6">Pengguna</th>
+                                    <th scope="col" class="py-3 px-6">Nama Kuis</th>
+                                    <th scope="col" class="py-3 px-6">Skor</th>
+                                    <th scope="col" class="py-3 px-6">Waktu</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-activity-body">
+                                <!-- Data akan diisi oleh JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
 
-                <!-- Leaderboard Table -->
-                <div class="table-container" id="leaderboardTableContainer" style="display: none;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Peringkat</th>
-                                <th>Nama Pengguna</th>
-                                <th>Total Poin</th>
-                                <th>Jumlah Kuis</th>
-                                <th>Rata-rata</th>
-                            </tr>
-                        </thead>
-                        <tbody id="leaderboardTableBody">
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Empty State for Leaderboard -->
-                <div id="leaderboardEmpty" class="empty-state" style="display: none;">
-                    <div class="empty-state-icon">🏆</div>
-                    <h3>Belum Ada Data</h3>
-                    <p>Belum ada pengguna yang mengerjakan kuis. Jadilah yang pertama!</p>
-                </div>
-            </div>
         </div>
-    </div>
-
-    <script>
-        // Konfigurasi API - ganti URL ini sesuai dengan backend Anda
-        const API_BASE_URL = window.location.origin; // Menggunakan domain yang sama
-        const API_ENDPOINTS = {
-            profile: `${API_BASE_URL}/api/profile`,
-            leaderboard: `${API_BASE_URL}/api/leaderboard`,
-            logout: `${API_BASE_URL}/api/logout`
-        };
-
-        // Utility Functions
-        function formatDate(dateString) {
-            const date = new Date(dateString);
-            return date.toLocaleDateString('id-ID', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-        }
-
-        function formatNumber(num) {
-            return new Intl.NumberFormat('id-ID').format(num);
-        }
-
-        function checkAuthentication() {
-            // Periksa apakah ada cookie sesi
-            const cookies = document.cookie.split(';');
-            let sessionExists = false;
-            
-            for (let cookie of cookies) {
-                const [name, value] = cookie.trim().split('=');
-                if (name === 'quiz_session' && value) {
-                    sessionExists = true;
-                    break;
-                }
-            }
-            
-            if (!sessionExists) {
-                // Redirect ke halaman login jika tidak ada sesi
-                alert('Anda harus login terlebih dahulu!');
-                window.location.href = '/'; // atau ke halaman login Anda
-                return false;
-            }
-            
-            return true;
-        }
-
-        // API Functions
-        async function fetchWithAuth(url, options = {}) {
-            try {
-                const response = await fetch(url, {
-                    ...options,
-                    credentials: 'include', // Sertakan cookies
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...options.headers
-                    }
-                });
-
-                if (response.status === 401) {
-                    // Token tidak valid, redirect ke login
-                    alert('Sesi Anda telah berakhir. Silakan login kembali.');
-                    window.location.href = '/';
-                    return null;
-                }
-
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                return await response.json();
-            } catch (error) {
-                console.error('Fetch error:', error);
-                throw error;
-            }
-        }
-
-        async function loadProfileData() {
-            const profileLoading = document.getElementById('profileLoading');
-            const profileError = document.getElementById('profileError');
-            const profileTableContainer = document.getElementById('profileTableContainer');
-            const profileEmpty = document.getElementById('profileEmpty');
-            
-            try {
-                profileLoading.style.display = 'flex';
-                profileError.style.display = 'none';
-                profileTableContainer.style.display = 'none';
-                profileEmpty.style.display = 'none';
-
-                const data = await fetchWithAuth(API_ENDPOINTS.profile);
-                
-                if (!data) return; // Auth error handled in fetchWithAuth
-
-                // Update welcome message
-                document.getElementById('welcomeMessage').innerHTML = 
-                    `Selamat datang, <strong>${data.username}</strong>! 👋`;
-
-                // Update stats
-                document.getElementById('totalQuizzes').textContent = formatNumber(data.total_quizzes);
-                document.getElementById('totalScore').textContent = formatNumber(data.total_score);
-                document.getElementById('averageScore').textContent = data.average_score;
-
-                profileLoading.style.display = 'none';
-
-                if (data.scores && data.scores.length > 0) {
-                    // Populate table
-                    const tbody = document.getElementById('profileTableBody');
-                    tbody.innerHTML = '';
-
-                    data.scores.forEach(score => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td><strong>${score.quiz_name}</strong></td>
-                            <td><span style="font-weight: 600; color: #42a5f5;">${formatNumber(score.score)}</span></td>
-                            <td>${formatDate(score.timestamp)}</td>
-                        `;
-                        tbody.appendChild(row);
-                    });
-
-                    profileTableContainer.style.display = 'block';
-                } else {
-                    profileEmpty.style.display = 'block';
-                }
-
-            } catch (error) {
-                console.error('Error loading profile:', error);
-                profileLoading.style.display = 'none';
-                profileError.style.display = 'block';
-                document.getElementById('profileErrorText').textContent = 
-                    'Gagal memuat data profil: ' + error.message;
-            }
-        }
-
-        async function loadLeaderboardData() {
-            const leaderboardLoading = document.getElementById('leaderboardLoading');
-            const leaderboardError = document.getElementById('leaderboardError');
-            const leaderboardTableContainer = document.getElementById('leaderboardTableContainer');
-            const leaderboardEmpty = document.getElementById('leaderboardEmpty');
-            
-            try {
-                leaderboardLoading.style.display = 'flex';
-                leaderboardError.style.display = 'none';
-                leaderboardTableContainer.style.display = 'none';
-                leaderboardEmpty.style.display = 'none';
-
-                const data = await fetchWithAuth(API_ENDPOINTS.leaderboard);
-                
-                if (!data) return; // Auth error handled in fetchWithAuth
-
-                leaderboardLoading.style.display = 'none';
-
-                if (data.leaderboard && data.leaderboard.length > 0) {
-                    // Populate leaderboard table
-                    const tbody = document.getElementById('leaderboardTableBody');
-                    tbody.innerHTML = '';
-
-                    data.leaderboard.forEach(entry => {
-                        const row = document.createElement('tr');
-                        
-                        // Determine rank badge class
-                        let rankClass = 'rank-other';
-                        if (entry.rank === 1) rankClass = 'rank-1';
-                        else if (entry.rank === 2) rankClass = 'rank-2';
-                        else if (entry.rank === 3) rankClass = 'rank-3';
-
-                        row.innerHTML = `
-                            <td>
-                                <span class="rank-badge ${rankClass}">${entry.rank}</span>
-                            </td>
-                            <td><strong>${entry.username}</strong></td>
-                            <td><span style="font-weight: 600; color: #42a5f5;">${formatNumber(entry.total_score)}</span></td>
-                            <td>${formatNumber(entry.quiz_count)}</td>
-                            <td>${entry.average_score}</td>
-                        `;
-                        tbody.appendChild(row);
-                    });
-
-                    leaderboardTableContainer.style.display = 'block';
-                } else {
-                    leaderboardEmpty.style.display = 'block';
-                }
-
-            } catch (error) {
-                console.error('Error loading leaderboard:', error);
-                leaderboardLoading.style.display = 'none';
-                leaderboardError.style.display = 'block';
-                document.getElementById('leaderboardErrorText').textContent = 
-                    'Gagal memuat papan peringkat: ' + error.message;
-            }
-        }
-
-        async function logout() {
-            try {
-                const response = await fetch(API_ENDPOINTS.logout, {
-                    credentials: 'include'
-                });
-                
-                // Redirect ke halaman utama setelah logout
-                window.location.href = '/';
-            } catch (error) {
-                console.error('Logout error:', error);
-                // Tetap redirect meski ada error
-                window.location.href = '/';
-            }
-        }
-
-        // Auto-refresh functionality
-        function startAutoRefresh() {
-            // Refresh data setiap 30 detik
-            setInterval(() => {
-                console.log('Auto-refreshing data...');
-                loadLeaderboardData(); // Hanya refresh leaderboard, profil jarang berubah
-            }, 30000);
-        }
-
-        // Initialize page
-        async function initializePage() {
-            // Periksa autentikasi
-            if (!checkAuthentication()) {
-                return;
-            }
-
-            // Load data
-            await Promise.all([
-                loadProfileData(),
-                loadLeaderboardData()
-            ]);
-
-            // Start auto-refresh
-            startAutoRefresh();
-
-            console.log('Dashboard loaded successfully!');
-        }
-
-        // Page Load Event
-        document.addEventListener('DOMContentLoaded', initializePage);
-
-        // Handle visibility change (pause auto-refresh when tab is not visible)
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                // Tab menjadi visible, refresh data
-                loadLeaderboardData();
-            }
-        });
-
-        // Error handling for unhandled promise rejections
-        window.addEventListener('unhandledrejection', (event) => {
-            console.error('Unhandled promise rejection:', event.reason);
-        });
-    </script>
+    </main>
 </body>
 </html>
